@@ -451,4 +451,29 @@ class CorrectionsTest extends TestCase
         ]);
         $this->assertStringContainsString('Acces non autorise', $response->json('response'));
     }
+
+    public function test_chatbot_allows_dlc_queries_for_caissier()
+    {
+        $caissier = User::factory()->create(['role_id' => Role::where('name', 'CAISSIER')->first()->id]);
+        
+        $product = Product::create([
+            'name' => 'Burger Poulet',
+            'type' => 'food',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+            'expiration_date' => '2026-07-10',
+        ]);
+
+        $response = $this->actingAsJwt($caissier)->postJson("/api/chatbot/ask", [
+            'product_id' => $product->id,
+            'message' => 'Quel est le dlc de ce produit ?'
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJsonFragment([
+            'source' => 'local_nlp_engine'
+        ]);
+        $this->assertStringContainsString('2026-07-10', $response->json('response'));
+    }
 }

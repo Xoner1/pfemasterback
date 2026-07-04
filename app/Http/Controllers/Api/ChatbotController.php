@@ -677,6 +677,7 @@ class ChatbotController extends Controller
             'allergen', 'allerg', 'allergi', 'gluten', 'lactose', 'arachide', 'diabète', 'diabete',
             'santé', 'sante', 'sécurité', 'securite', 'ingréd', 'compos',
             'calor', 'nutrit', 'conforme', 'hygiène', 'hygiene', 'malad',
+            'dlc', 'expiration', 'perim', 'périm', 'expire',
             'حساسية', 'جلوتين', 'لاكتوز', 'مكونات', 'صحة', 'مرض',
             'سكري', 'مريض', 'أمان', 'سليم', 'تسمم', 'انتهاء', 'تاريخ',
             'مكسرات', 'صويا', 'سمك', 'بيض', 'قمح', 'حليب',
@@ -717,9 +718,47 @@ class ChatbotController extends Controller
             return "Aucun rapport officiel d'hygiène ou certificat de conformité n'a été enregistré pour le produit \"" . $product->name . "\". Par sécurité, la conformité de ce produit ne peut être confirmée.";
         }
 
-        // 3. Return available data (DLC, Ingredients, Allergens, Reports if any)
-        $parts = [];
-        $parts[] = "Informations sanitaires pour \"" . $product->name . "\" :\n";
+        // 3. Specific Query Parsers
+        $isAllergenQuery = false;
+        $allergenKeywords = ['allergen', 'allerg', 'حساسية', 'مكسرات', 'قمح', 'بيض', 'حليب', 'سمك', 'gluten', 'lactose', 'arachid'];
+        foreach ($allergenKeywords as $kw) {
+            if (str_contains($messageLower, $kw)) {
+                $isAllergenQuery = true;
+                break;
+            }
+        }
+
+        $isIngredientQuery = false;
+        $ingredientKeywords = ['ingréd', 'ingred', 'compos', 'مكونات', 'تركيب', 'وصفة'];
+        foreach ($ingredientKeywords as $kw) {
+            if (str_contains($messageLower, $kw)) {
+                $isIngredientQuery = true;
+                break;
+            }
+        }
+
+        $isDlcQuery = false;
+        $dlcKeywords = ['dlc', 'expiration', 'perim', 'périm', 'expire', 'تاريخ', 'انتهاء', 'صلاحية'];
+        foreach ($dlcKeywords as $kw) {
+            if (str_contains($messageLower, $kw)) {
+                $isDlcQuery = true;
+                break;
+            }
+        }
+
+        $isConformQuery = false;
+        $conformKeywords = ['conforme', 'hygien', 'hygièn', 'سلامة', 'صحة', 'مطابق', 'أمان'];
+        foreach ($conformKeywords as $kw) {
+            if (str_contains($messageLower, $kw)) {
+                $isConformQuery = true;
+                break;
+            }
+        }
+
+        $allergensList = is_array($product->allergens) ? implode(', ', $product->allergens) : ($product->allergens ?? 'aucun');
+        if (empty($allergensList)) {
+            $allergensList = 'aucun';
+        }
 
         // Ingredients Loading
         $ingredientsList = "";
@@ -728,50 +767,41 @@ class ChatbotController extends Controller
         } else {
             $ingredientsList = trim($product->description ?? '');
         }
-        if (!empty($ingredientsList)) {
-            $parts[] = "Composition/Ingredients :\n" . $ingredientsList . "\n";
-        }
 
-        // Expiration/DLC
-        if ($product->expiration_date) {
-            $parts[] = "Date limite de consommation (DLC) : " . $product->expiration_date . "\n";
-        }
+        $dlc = $product->expiration_date ?? 'non specifiee';
 
-        $allergensList = is_array($product->allergens) ? implode(', ', $product->allergens) : ($product->allergens ?? 'Aucun.');
-        $parts[] = "Allergenes declares : " . $allergensList . "\n";
-
+        // Compliance status string
+        $statusStr = "Non evalue";
+        $remarksStr = "";
         if ($product->hygieneReports->isNotEmpty()) {
-            $parts[] = "Statut de conformite :";
-            foreach ($product->hygieneReports as $report) {
-                // Status
-                if ($report->status === 'conforme') {
-                    $parts[] = " - Statut : CONFORME";
-                } else {
-                    $parts[] = " - Statut : En cours d'inspection";
-                }
-
-                // Allergens verification
-                if ($report->allergens_verified) {
-                    $parts[] = " - Allergenes : Verifies et valides par le responsable Hygiene.";
-                } else {
-                    $parts[] = " - Allergenes : Non encore verifies par le responsable Hygiene.";
-                }
-
-                // Expiration verification
-                if ($report->expiration_verified) {
-                    $parts[] = " - Date d'expiration : Verifiee et conforme.";
-                } else {
-                    $parts[] = " - Date d'expiration : Non encore verifiee.";
-                }
-
-                // Remarks (only if present)
-                if ($report->remarks) {
-                    $parts[] = " - Remarques : \"{$report->remarks}\"";
-                }
-            }
+            $lastReport = $product->hygieneReports->first();
+            $statusStr = $lastReport->status === 'conforme' ? 'CONFORME' : ($lastReport->status === 'non_conforme' ? 'NON CONFORME' : 'En cours d\'inspection');
+            $remarksStr = $lastReport->remarks ? " ({$lastReport->remarks})" : "";
         }
 
-        return implode("\n", $parts);
+        // Response formatting based on question type
+        if ($isAllergenQuery) {
+            return "Les allergenes declares pour \"" . $product->name . "\" sont : " . $allergensList . ". (Statut : " . $statusStr . $remarksStr . ").";
+        }
+
+        if ($isIngredientQuery) {
+            return "Composition / Ingredients de \"" . $product->name . "\" :\n" . ($ingredientsList ?: 'Aucun ingredient specifie.');
+        }
+
+        if ($isDlcQuery) {
+            return "La date limite de consommation (DLC) pour \"" . $product->name . "\" est : " . $dlc . ". (Statut : " . $statusStr . ").";
+        }
+
+        if ($isConformQuery) {
+            return "Statut de conformite hygiene pour \"" . $product->name . "\" : " . $statusStr . $remarksStr . ".";
+        }
+
+        // Fallback detailed summary
+        return "Informations sanitaires pour \"" . $product->name . "\" :\n" .
+               "- Composition/Ingredients :\n" . ($ingredientsList ?: 'Aucun') . "\n" .
+               "- Date limite de consommation (DLC) : " . $dlc . "\n" .
+               "- Allergenes declares : " . $allergensList . "\n" .
+               "- Statut de conformite : " . $statusStr . $remarksStr;
     }
 
     /**
@@ -792,6 +822,7 @@ class ChatbotController extends Controller
             'allerg', 'allergi', 'gluten', 'lactose', 'arachid', 'œuf', 'oeuf', 'ingréd', 'ingred', 'compos', 'calor',
             'nutri', 'diabét', 'diabet', 'coeliaque', 'cœliaque', 'sensibl', 'malad', 'manger', 'sain',
             'lait', 'fromage', 'farine', 'blé', 'sucre', 'sel', 'gras', 'hygien', 'hygièn', 'sant', 'conform',
+            'dlc', 'expiration', 'perim', 'périm', 'expire',
             'حساسية', 'جلوتين', 'لاكتوز', 'مكونات', 'صحة', 'مرض', 'سكري', 'ضغط', 'حليب', 'بيض', 'قمح', 'مريض', 'أكل', 'تناول',
             'صالح', 'تسمم', 'تاريخ', 'انتهاء', 'أمان', 'سليم', 'عنب', 'مكسرات', 'فول صويا', 'سمك',
         ];
