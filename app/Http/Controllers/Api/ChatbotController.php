@@ -68,7 +68,7 @@ class ChatbotController extends Controller
 
         $roleInstruction = $roleDescriptions[$userRole] ?? "Tu es l'assistant de l'application AeroServe.";
         $userContext     = $user ? $this->getUserContextText($user) : "Aucun contexte utilisateur.";
-
+        
         $productContext      = "";
         $hygieneReportsContext = "";
 
@@ -79,8 +79,6 @@ class ChatbotController extends Controller
                 return response()->json(['success' => false, 'message' => 'Produit non trouve.'], 404);
             }
 
-            // Programmatic Guardrail: If no hygiene reports exist AND there is no substantial ingredients list,
-            // check if the question is health-related and return a safe message immediately to prevent hallucinations.
             $isHealthQuestion = false;
             $healthKeywords = [
                 'allergen', 'allerg', 'gluten', 'lactose', 'arachid', 'diabét', 'diabet',
@@ -110,7 +108,7 @@ class ChatbotController extends Controller
                     'fr' => "Désolé, ce produit est marqué non conforme (NON CONFORME) par le responsable Hygiène. Pour des raisons de sécurité alimentaire, aucune information (ingrédients, DLC, allergènes) ne peut être divulguée pour ce produit.",
                     'en' => "Sorry, this product is marked as non-conforming (NON CONFORME) by the hygiene officer. For food safety reasons, no information (ingredients, expiration date, allergens) can be provided for this product.",
                     'es' => "Lo sentimos, este producto está marcado como no conforme (NON CONFORME) por el responsable de higiene. Por razones de seguridad alimentaria, no se puede proporcionar ninguna información sobre este producto.",
-                    'it' => "Spiacenti, questo produit est contrassegnato come non conforme (NON CONFORME) dal responsabile dell'igiene. Per motivi di sicurezza alimentare, non è possibile fornire alcuna informazione su questo produit.",
+                    'it' => "Spiacenti, questo produit est contrassegnato come non conforme (NON CONFORME) dal responsabile dell'igiene. Per motivi di sicurezza alimentaire, non è possibile fornire alcuna informazione su questo produit.",
                     'de' => "Entschuldigung, dieses Produkt wurde vom Hygienebeauftragten als nicht konform (NON CONFORME) eingestuft. Aus Gründen der Lebensmittelsicherheit können keine Informationen zu diesem Produkt bereitgestellt werden."
                 ];
                 $responseMsg = $nonConformeWarnings[$lang] ?? $nonConformeWarnings['en'];
@@ -131,18 +129,31 @@ class ChatbotController extends Controller
             }
 
             $hasHygiene = $product->hygieneReports->isNotEmpty();
-            $hasIngredients = !empty($ingredientsList) && strlen($ingredientsList) > 5;
+            $hasIngredients = !empty($ingredientsList) && strlen($ingredientsList) > 2;
 
-            if ($userRole === 'CAISSIER' || $userRole === 'GUEST' || $isHealthQuestion) {
-                if (!$hasHygiene && !$hasIngredients) {
+            // 3. COMPLIANCE/SAFETY QUESTIONS GUARDRAIL (Only block if they ask about compliance/safety AND there are no reports)
+            $isComplianceQuestion = false;
+            $complianceKeywords = [
+                'conforme', 'hygièn', 'hygien', 'sécurit', 'securit', 'sicher', 'segur', 'sicur',
+                'أمان', 'سليم', 'تسمم', 'مطابق', 'صحة', 'سلامة'
+            ];
+            foreach ($complianceKeywords as $kw) {
+                if (str_contains($messageLower, $kw)) {
+                    $isComplianceQuestion = true;
+                    break;
+                }
+            }
+
+            if (($userRole === 'CAISSIER' || $userRole === 'GUEST' || $isHealthQuestion) && $isComplianceQuestion) {
+                if (!$hasHygiene) {
                     $lang = $this->detectMessageLanguage($message);
                     $warnings = [
-                        'ar' => "عذراً، لم يتم تسجيل أي تقرير صحي رسمي أو قائمة مكونات مفصلة للمنتج \"" . $product->name . "\" من قبل مسؤول النظافة والسلامة الصحية (RESPONSABLE_HYGIENE). لدواعي السلامة، لا يمكن تقديم أي نصائح صحية أو معلومات حول توافق الحساسية لهذا المنتج.",
-                        'fr' => "Désolé, aucun rapport officiel d'hygiène ou liste détaillée d'ingrédients n'a été enregistré pour le produit \"" . $product->name . "\" par le responsable Hygiène (RESPONSABLE_HYGIENE). Par sécurité, aucun conseil de santé ou de compatibilité allergène ne peut être donné pour ce produit.",
-                        'en' => "Sorry, no official hygiene report or detailed ingredients list has been recorded for the product \"" . $product->name . "\" by the hygiene officer (RESPONSABLE_HYGIENE). For safety reasons, no health advice or allergen compatibility information can be provided for this product.",
-                        'es' => "Lo sentimos, el responsable de higiene (RESPONSABLE_HYGIENE) no ha registrado ningún informe oficial de higiene ni una lista detallada de ingredientes para le produit \"" . $product->name . "\". Por razones de seguridad, no se pueden proporcionar consejos de salud o información de compatibilité de alérgenos para este producto.",
-                        'it' => "Spiacenti, non è stato registrato alcun rapporto ufficiale di igiene o elenco dettagliato degli ingredienti per il produit \"" . $product->name . "\" da parte del responsable dell'igiene (RESPONSABLE_HYGIENE). Per motivi di sicurezza, non è possibile fornire consigli sulla salute o informazioni sulla compatibilité con gli allergeni per questo prodotto.",
-                        'de' => "Entschuldigung, für das Produkt \"" . $product->name . "\" wurde vom Hygienebeauftragten (RESPONSABLE_HYGIENE) kein offizieller Hygienebericht oder eine detaillierte Zutatenliste erfasst. Aus Sicherheitsgründen können für dieses Produkt keine Gesundheitsratschläge oder Informationen zur Allergenverträglichkeit bereitgestellt werden."
+                        'ar' => "عذراً، لم يتم تسجيل أي تقرير صحي رسمي أو شهادة مطابقة للمنتج \"" . $product->name . "\" من قبل مسؤول النظافة والسلامة الصحية (RESPONSABLE_HYGIENE). لدواعي السلامة، لا يمكن تأكيد مطابقة هذا المنتج.",
+                        'fr' => "Désolé, aucun rapport officiel d'hygiène ou certificat de conformité n'a été enregistré pour le produit \"" . $product->name . "\" par le responsable Hygiène (RESPONSABLE_HYGIENE). Par sécurité, la conformité de ce produit ne peut être confirmée.",
+                        'en' => "Sorry, no official hygiene report or conformity certificate has been recorded for the product \"" . $product->name . "\" by the hygiene officer (RESPONSABLE_HYGIENE). For safety reasons, the conformity of this product cannot be confirmed.",
+                        'es' => "Lo sentimos, el responsable de higiene (RESPONSABLE_HYGIENE) no ha registrado ningún informe oficial de higiene ni certificado de conformidad para el producto \"" . $product->name . "\". Por seguridad, no se puede confirmar la conformidad de este producto.",
+                        'it' => "Spiacenti, non è stato registrato alcun rapporto ufficiale di igiene o certificato di conformità per il prodotto \"" . $product->name . "\" da parte del responsabile dell'igiene (RESPONSABLE_HYGIENE). Per sicurezza, la conformità di questo produit non può essere confermata.",
+                        'de' => "Entschuldigung, für das Produkt \"" . $product->name . "\" wurde vom Hygienebeauftragten (RESPONSABLE_HYGIENE) kein offizieller Hygienebericht oder Konformitätszertifikat erfasst. Aus Sicherheitsgründen kann die Konformität dieses Produkts nicht bestätigt werden."
                     ];
                     $responseMsg = $warnings[$lang] ?? $warnings['en'];
 
@@ -683,20 +694,32 @@ class ChatbotController extends Controller
             return "Je suis desole, je ne reponds qu'aux questions sur la sante, les allergenes et la composition des produits. Pour toute question administrative ou logistique, utilisez les autres sections de l'application.";
         }
 
-        // 1. Non-conformity check
+        // 1. Non-conformity check (Block everything if marked non_conforme)
         $hasNonConformeReport = $product->hygieneReports->contains('status', 'non_conforme');
         if ($hasNonConformeReport) {
             return "Désolé, ce produit est marqué non conforme (NON CONFORME) par le responsable Hygiène. Pour des raisons de sécurité alimentaire, aucune information (ingrédients, expiration, allergènes) ne peut être divulguée pour ce produit.";
         }
 
-        // No hygiene reports → no data to answer from
-        if (!$product->hygieneReports || $product->hygieneReports->isEmpty()) {
-            return "Aucune declaration sanitaire n'a encore ete enregistree par le responsable Hygiene pour le produit \"" . $product->name . "\". Mes reponses sont basees exclusivement sur les rapports officiels du responsable Hygiene. Veuillez contacter le responsable Hygiene pour obtenir ces informations.";
+        // 2. Compliance check (Only block if they ask about compliance/safety AND there are no reports)
+        $isComplianceQuestion = false;
+        $complianceKeywords = [
+            'conforme', 'hygièn', 'hygien', 'sécurit', 'securit', 'sicher', 'segur', 'sicur',
+            'أمان', 'سليم', 'تسمم', 'مطابق', 'صحة', 'سلامة'
+        ];
+        foreach ($complianceKeywords as $kw) {
+            if (str_contains($messageLower, $kw)) {
+                $isComplianceQuestion = true;
+                break;
+            }
         }
 
-        // Build response strictly from hygiene report data
+        if ($isComplianceQuestion && $product->hygieneReports->isEmpty()) {
+            return "Aucun rapport officiel d'hygiène ou certificat de conformité n'a été enregistré pour le produit \"" . $product->name . "\". Par sécurité, la conformité de ce produit ne peut être confirmée.";
+        }
+
+        // 3. Return available data (DLC, Ingredients, Allergens, Reports if any)
         $parts = [];
-        $parts[] = "Informations sanitaires pour \"" . $product->name . "\" (donnees declarees par le responsable Hygiene) :\n";
+        $parts[] = "Informations sanitaires pour \"" . $product->name . "\" :\n";
 
         // Ingredients Loading
         $ingredientsList = "";
@@ -717,33 +740,34 @@ class ChatbotController extends Controller
         $allergensList = is_array($product->allergens) ? implode(', ', $product->allergens) : ($product->allergens ?? 'Aucun.');
         $parts[] = "Allergenes declares : " . $allergensList . "\n";
 
-        foreach ($product->hygieneReports as $report) {
-            // Status
-            if ($report->status === 'non_conforme') {
-                $parts[] = " Statut : NON CONFORME — " . ($report->remarks ?: "Aucun commentaire ajoute.");
-            } elseif ($report->status === 'conforme') {
-                $parts[] = " Statut : CONFORME";
-            } else {
-                $parts[] = "Statut : En cours d'inspection";
-            }
+        if ($product->hygieneReports->isNotEmpty()) {
+            $parts[] = "Statut de conformite :";
+            foreach ($product->hygieneReports as $report) {
+                // Status
+                if ($report->status === 'conforme') {
+                    $parts[] = " - Statut : CONFORME";
+                } else {
+                    $parts[] = " - Statut : En cours d'inspection";
+                }
 
-            // Allergens verification
-            if ($report->allergens_verified) {
-                $parts[] = "Allergenes : Verifies et valides par le responsable Hygiene.";
-            } else {
-                $parts[] = "Allergenes : Non encore verifies par le responsable Hygiene.";
-            }
+                // Allergens verification
+                if ($report->allergens_verified) {
+                    $parts[] = " - Allergenes : Verifies et valides par le responsable Hygiene.";
+                } else {
+                    $parts[] = " - Allergenes : Non encore verifies par le responsable Hygiene.";
+                }
 
-            // Expiration verification
-            if ($report->expiration_verified) {
-                $parts[] = "Date d'expiration : Verifiee et conforme.";
-            } else {
-                $parts[] = "Date d'expiration : Non encore verifiee.";
-            }
+                // Expiration verification
+                if ($report->expiration_verified) {
+                    $parts[] = " - Date d'expiration : Verifiee et conforme.";
+                } else {
+                    $parts[] = " - Date d'expiration : Non encore verifiee.";
+                }
 
-            // Remarks (only if present)
-            if ($report->remarks) {
-                $parts[] = "Remarques du responsable Hygiene : \"" . $report->remarks . "\"";
+                // Remarks (only if present)
+                if ($report->remarks) {
+                    $parts[] = " - Remarques : \"{$report->remarks}\"";
+                }
             }
         }
 
@@ -767,7 +791,7 @@ class ChatbotController extends Controller
         $allowedKeywords = [
             'allerg', 'allergi', 'gluten', 'lactose', 'arachid', 'œuf', 'oeuf', 'ingréd', 'ingred', 'compos', 'calor',
             'nutri', 'diabét', 'diabet', 'coeliaque', 'cœliaque', 'sensibl', 'malad', 'manger', 'sain',
-            'lait', 'fromage', 'farine', 'blé', 'sucre', 'sel', 'gras', 'hygien', 'hygièn', 'sant',
+            'lait', 'fromage', 'farine', 'blé', 'sucre', 'sel', 'gras', 'hygien', 'hygièn', 'sant', 'conform',
             'حساسية', 'جلوتين', 'لاكتوز', 'مكونات', 'صحة', 'مرض', 'سكري', 'ضغط', 'حليب', 'بيض', 'قمح', 'مريض', 'أكل', 'تناول',
             'صالح', 'تسمم', 'تاريخ', 'انتهاء', 'أمان', 'سليم', 'عنب', 'مكسرات', 'فول صويا', 'سمك',
         ];

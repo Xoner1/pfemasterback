@@ -386,13 +386,37 @@ class CorrectionsTest extends TestCase
             'is_active' => true,
         ]);
 
-        // No product_id passed, but product name is in the message
+        // No product_id passed, but product name is in the message (asking about allergens, should not block)
         $response = $this->actingAsJwt($guestUser)->postJson("/api/chatbot/ask", [
             'message' => 'Quels sont les allergènes de Salade Cesar Speciale ?'
         ]);
 
         $response->assertStatus(200);
-        // It should match the name and hit the hygiene guardrail (since no reports exist)
+        // It should match the name and resolve the allergens successfully
+        $response->assertJsonFragment([
+            'source' => 'local_nlp_engine'
+        ]);
+        $this->assertStringContainsString('Salade Cesar Speciale', $response->json('response'));
+    }
+
+    public function test_chatbot_blocks_compliance_questions_when_reports_are_absent()
+    {
+        $guestUser = User::factory()->create(['role_id' => Role::where('name', 'CAISSIER')->first()->id]);
+        
+        $product = Product::create([
+            'name' => 'Pizza Veggie',
+            'type' => 'food',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+        ]);
+
+        // Ask about compliance/safety, should block because there are no hygiene reports
+        $response = $this->actingAsJwt($guestUser)->postJson("/api/chatbot/ask", [
+            'message' => 'Est-ce que Pizza Veggie est conforme ?'
+        ]);
+
+        $response->assertStatus(200);
         $response->assertJsonFragment([
             'source' => 'hygiene_guardrail_engine'
         ]);
