@@ -25,7 +25,7 @@ trait FifoStockTrait
         $batches = StockMovement::where('stock_id', $stock->id)
             ->where('type', 'in')
             ->where('quantity', '>', 0)
-            ->orderByRaw('ISNULL(expiration_date) ASC')
+            ->orderByRaw('case when expiration_date is null then 1 else 0 end asc')
             ->orderBy('expiration_date', 'asc')
             ->orderBy('created_at', 'asc')
             ->get();
