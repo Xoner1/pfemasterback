@@ -192,6 +192,43 @@ class ChatbotController extends Controller
             } else {
                 $hygieneReportsContext = "\nDeclarations du responsable Hygiene: Aucune remarque d'hygiene specifique n'a encore ete enregistree pour ce produit.\n";
             }
+
+            // 4. RADICAL PRE-GROQ GUARDRAIL
+            // When a health/ingredient/allergen query is detected AND the product has NO data in DB,
+            // bypass Groq entirely and return a deterministic server-side response.
+            // This prevents Groq from hallucinating invented ingredient/allergen data.
+            if ($isHealthQuestion) {
+                $hasAnyData = $hasIngredients || $hasHygiene ||
+                              ($product->allergens && !empty($product->allergens)) ||
+                              $product->expiration_date;
+
+                if (!$hasAnyData) {
+                    $lang = $this->detectMessageLanguage($message);
+                    $emptyDataResponses = [
+                        'ar' => "لم يتم تسجيل أي مكونات أو بيانات صحية رسمية للمنتج \"" . $product->name . "\" في النظام حتى الآن. يرجى التواصل مع Chef Cuisine لتسجيل مكونات الوصفة، ومع RESPONSABLE_HYGIENE لتسجيل التقارير الصحية.",
+                        'fr' => "Aucune donnée (ingrédients, allergènes, DLC, rapport d'hygiène) n'a encore été enregistrée pour le produit \"" . $product->name . "\" dans le système. Veuillez contacter le Chef Cuisine pour enregistrer la recette, et le RESPONSABLE_HYGIENE pour les rapports sanitaires.",
+                        'en' => "No data (ingredients, allergens, DLC, hygiene report) has been recorded yet for the product \"" . $product->name . "\" in the system. Please contact the Chef Cuisine to register the recipe, and the RESPONSABLE_HYGIENE for health reports.",
+                        'es' => "No se han registrado datos (ingredientes, alérgenos, DLC, informe de higiene) para el producto \"" . $product->name . "\" en el sistema. Contacte al Chef Cuisine para registrar la receta y al RESPONSABLE_HYGIENE para los informes sanitarios.",
+                        'it' => "Nessun dato (ingredienti, allergeni, DLC, rapporto igienico) è ancora stato registrato per il prodotto \"" . $product->name . "\" nel sistema. Contattare il Chef Cuisine per registrare la ricetta e il RESPONSABLE_HYGIENE per i rapporti sanitari.",
+                        'de' => "Für das Produkt \"" . $product->name . "\" wurden noch keine Daten (Zutaten, Allergene, MHD, Hygienebericht) im System erfasst. Bitte wenden Sie sich an den Chef Cuisine für die Rezeptregistrierung und den RESPONSABLE_HYGIENE für die Hygieneberichte.",
+                    ];
+                    $responseMsg = $emptyDataResponses[$lang] ?? $emptyDataResponses['fr'];
+                    return response()->json([
+                        'success'  => true,
+                        'response' => $responseMsg,
+                        'source'   => 'data_missing_guardrail'
+                    ]);
+                }
+
+                // If data exists — use local NLP directly for health questions (no Groq needed)
+                // Groq only adds hallucination risk for health-critical data
+                $localResponse = $this->getLocalNlpResponse($product, $message);
+                return response()->json([
+                    'success'  => true,
+                    'response' => $localResponse,
+                    'source'   => 'local_nlp_engine'
+                ]);
+            }
         }
 
         if ($userRole === 'CAISSIER' || $userRole === 'GUEST') {

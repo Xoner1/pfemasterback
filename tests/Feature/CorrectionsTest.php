@@ -392,9 +392,9 @@ class CorrectionsTest extends TestCase
         ]);
 
         $response->assertStatus(200);
-        // It should match the name and resolve the allergens successfully
+        // Product has no data registered, new guardrail should return data_missing_guardrail
         $response->assertJsonFragment([
-            'source' => 'local_nlp_engine'
+            'source' => 'data_missing_guardrail'
         ]);
         $this->assertStringContainsString('Salade Cesar Speciale', $response->json('response'));
     }
