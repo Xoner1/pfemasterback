@@ -281,10 +281,11 @@ class InternalOrderController extends Controller
         \Illuminate\Support\Facades\DB::transaction(function () use ($item, $request, $diff, $internalOrder) {
             $item->update(['quantity_fulfilled' => $request->quantity_fulfilled]);
 
-            // Deduct from stock if quantity increased
+            // Deduct from stock and produce food if quantity increased
             if ($diff > 0 && $item->product) {
                 $product = $item->product;
                 if ($product->type === 'food') {
+                    // 1. Deduct ingredients from stock
                     $ingredients = $product->ingredients()->with('stock')->get();
                     foreach ($ingredients as $ingredient) {
                         $rawRequired = $ingredient->pivot->quantity * $diff;
@@ -296,6 +297,17 @@ class InternalOrderController extends Controller
                                 "Fulfill Order #{$internalOrder->id} ({$product->name})"
                             );
                         }
+                    }
+
+                    // 2. Add the produced food product itself to stock
+                    if ($product->stock) {
+                        $product->stock->increment('quantity', $diff);
+                        $product->stock->movements()->create([
+                            'type' => 'in',
+                            'quantity' => $diff,
+                            'reason' => "Fulfill Order #{$internalOrder->id} (Produced)",
+                            'user_id' => auth()->id(),
+                        ]);
                     }
                 } else {
                     if ($product->stock) {

@@ -166,4 +166,76 @@ class CorrectionsTest extends TestCase
         $response->assertStatus(422);
         $response->assertJsonValidationErrors('status');
     }
+
+    public function test_food_order_fulfillment_deducts_ingredients_and_increments_food_stock()
+    {
+        $chefCuisine = User::factory()->create(['role_id' => Role::where('name', 'CHEF_CUISINE')->first()->id]);
+        
+        $ingredient = Product::create([
+            'name' => 'Tomato',
+            'type' => 'matiere_premiere',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+        ]);
+        $ingredientStock = $ingredient->stock()->create([
+            'quantity' => 100,
+            'min_threshold' => 10,
+            'unit' => 'piece',
+        ]);
+        $ingredientStock->movements()->create([
+            'type' => 'in',
+            'quantity' => 100,
+            'user_id' => $chefCuisine->id,
+        ]);
+
+        $foodProduct = Product::create([
+            'name' => 'Sandwich Poulet',
+            'type' => 'food',
+            'unit' => 'piece',
+            'approval_status' => 'approved',
+            'is_active' => true,
+        ]);
+        $foodStock = $foodProduct->stock()->create([
+            'quantity' => 0,
+            'min_threshold' => 5,
+            'unit' => 'piece',
+        ]);
+
+        $foodProduct->ingredients()->attach($ingredient->id, [
+            'quantity' => 2,
+            'unit' => 'piece',
+        ]);
+
+        $airport = \App\Models\Airport::create(['name' => 'Airport 4', 'code' => 'AR4']);
+        $pdv = PointDeVente::create(['name' => 'PDV 4', 'airport_id' => $airport->id]);
+
+        $order = InternalOrder::create([
+            'created_by' => $chefCuisine->id,
+            'assigned_to' => $chefCuisine->id,
+            'pdv_id' => $pdv->id,
+            'type' => 'food',
+            'status' => 'EN_ATTENTE',
+        ]);
+
+        $orderItem = InternalOrderItem::create([
+            'internal_order_id' => $order->id,
+            'product_id' => $foodProduct->id,
+            'quantity_requested' => 10,
+            'quantity_fulfilled' => 0,
+        ]);
+
+        // Fulfill 10 units
+        $response = $this->actingAsJwt($chefCuisine)->putJson("/api/internal-orders/{$order->id}/items/{$orderItem->id}/fulfill", [
+            'quantity_fulfilled' => 10,
+        ]);
+
+        $response->assertStatus(200);
+
+        // Verify ingredient stock decremented: 100 - (10 * 2) = 80
+        $this->assertEquals(80, $ingredientStock->fresh()->quantity);
+
+        // Verify food product stock incremented: 0 + 10 = 10
+        $this->assertEquals(10, $foodStock->fresh()->quantity);
+    }
 }
